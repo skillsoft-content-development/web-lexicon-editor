@@ -1,24 +1,76 @@
 import React from 'react';
-import logo from './logo.svg';
-import './App.css';
 
 function App() {
   return (
-    <div className="App">
-      <header className="App-header">
-        <img src={logo} className="App-logo" alt="logo" />
-        <p>
-          Edit <code>src/App.tsx</code> and save to reload.
-        </p>
-        <a
-          className="App-link"
-          href="https://reactjs.org"
-          target="_blank"
-          rel="noopener noreferrer"
+    <div className="container">
+      <div className="card">
+        <h1 className="title">Lexicon Editor</h1>
+        <div className="form-group">
+          <label className="label">
+            Select Lexicon File
+          </label>
+          <select
+            className="select"
+            disabled
+          >
+            <option value="">Select a file...</option>
+            <option value="sample.xml">sample.xml</option>
+          </select>
+        </div>
+
+        <div className="entry">
+          <div className="grid">
+            <div className="form-group">
+              <label className="label">
+                Word
+              </label>
+              <input
+                type="text"
+                className="input"
+                value="example"
+                readOnly
+              />
+            </div>
+            <div className="form-group">
+              <label className="label">
+                Pronunciation
+              </label>
+              <input
+                type="text"
+                className="input"
+                value="ɪɡˈzæmpəl"
+                readOnly
+              />
+            </div>
+          </div>
+          <div className="form-group">
+            <label className="label">
+              Attributes
+            </label>
+            <div className="grid">
+              <input
+                type="text"
+                className="input"
+                value="partOfSpeech"
+                readOnly
+              />
+              <input
+                type="text"
+                className="input"
+                value="noun"
+                readOnly
+              />
+            </div>
+          </div>
+        </div>
+
+        <button
+          className="button"
+          disabled
         >
-          Learn React
-        </a>
-      </header>
+          Save Changes
+        </button>
+      </div>
     </div>
   );
 }
