@@ -19,6 +19,9 @@ function App() {
   const [selectedIndex, setSelectedIndex] = useState<number | null>(null);
   const [currentFile, setCurrentFile] = useState<string>('');
   const [showFileModal, setShowFileModal] = useState(false);
+  const [showNewLexiconModal, setShowNewLexiconModal] = useState(false);
+  const [newLexiconName, setNewLexiconName] = useState('');
+  const [newLexiconError, setNewLexiconError] = useState<string | null>(null);
   const [blobList, setBlobList] = useState<string[]>([]);
   const [loadingBlobs, setLoadingBlobs] = useState(false);
   const [loadingFile, setLoadingFile] = useState(false);
@@ -371,6 +374,46 @@ function App() {
     if (blobName) handleSelectBlob(blobName);
   };
 
+  const handleCreateNewLexicon = async () => {
+    if (!newLexiconName.trim()) {
+      setNewLexiconError('Please enter a lexicon name');
+      return;
+    }
+
+    // Add .xml extension if not present
+    let finalName = newLexiconName.trim();
+    if (!finalName.toLowerCase().endsWith('.xml')) {
+      finalName += '.xml';
+    }
+
+    // Validate the name format (only check for valid characters now since we handle the extension)
+    if (!/^[a-zA-Z0-9-_]+\.xml$/.test(finalName)) {
+      setNewLexiconError('Lexicon name must contain only letters, numbers, hyphens, and underscores');
+      return;
+    }
+
+    setNewLexiconError(null);
+    setShowNewLexiconModal(false);
+
+    // Create a new lexicon with a master entry
+    const newEntry: LexiconEntry = {
+      graphemes: ['*** NEW ENTRY ***'],
+      alias: '',
+      phoneme: ''
+    };
+
+    // Clear any existing state and set up the new lexicon
+    setEntries([newEntry]);
+    setSavedEntries([]); // Empty saved entries to indicate unsaved state
+    setSelectedIndex(0);
+    setCurrentFile(finalName);
+    setSaveSuccess(null);
+    setSaveError(null);
+
+    // Add spoof entry to blobList if not present
+    setBlobList((prev) => prev.includes(finalName) ? prev : [finalName, ...prev]);
+  };
+
   // Block main UI if API key modal is open
   if (showKeyModal) {
     return (
@@ -437,8 +480,25 @@ function App() {
         {/* Main Content Section */}
         <div className="px-6 py-6 space-y-5 flex-1 flex flex-col">
           {currentFile && (
-            <div className="pt-2 pb-1 text-xs text-gray-500">
-              Current file: <span className="font-mono">{currentFile}</span>
+            <div className="flex items-center justify-between pt-1 pb-0 mb-1">
+              <div className="text-xs text-gray-500">
+                Current file: <span className="font-mono">{currentFile}</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={handleSaveLexicon}
+                  disabled={saving || !hasUnsavedChanges}
+                  className="btn btn-primary px-4 py-2 text-base disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {saving ? 'Saving...' : 'Save Lexicon'}
+                </button>
+                {saveSuccess && (
+                  <span className="text-green-500 text-sm">{saveSuccess}</span>
+                )}
+                {saveError && (
+                  <span className="text-red-500 text-sm">{saveError}</span>
+                )}
+              </div>
             </div>
           )}
 
@@ -450,18 +510,26 @@ function App() {
               <div className="flex flex-col gap-3 mb-4">
                 <div className="flex flex-col">
                   <label htmlFor="lexicon-select" className="text-sm font-medium text-gray-700 mb-1">Lexicon:</label>
-                  <select
-                    id="lexicon-select"
-                    className="w-full p-2.5 rounded-lg border border-gray-300 text-gray-800 focus:ring-2 focus:ring-gray-500 focus:border-gray-500 bg-white text-base shadow-sm"
-                    value={currentFile || ''}
-                    onChange={handleLexiconSelect}
-                    disabled={loadingBlobs}
-                  >
-                    <option value="" disabled>Select a Lexicon...</option>
-                    {blobList.map((blob) => (
-                      <option key={blob} value={blob}>{blob}</option>
-                    ))}
-                  </select>
+                  <div className="flex gap-2 items-center">
+                    <select
+                      id="lexicon-select"
+                      className="flex-grow h-11 appearance-none rounded-lg border border-gray-300 text-gray-800 focus:ring-2 focus:ring-gray-500 focus:border-gray-500 bg-white text-base shadow-sm px-3"
+                      value={currentFile || ''}
+                      onChange={handleLexiconSelect}
+                      disabled={loadingBlobs}
+                    >
+                      <option value="" disabled>Select a Lexicon...</option>
+                      {blobList.map((blob) => (
+                        <option key={blob} value={blob}>{blob}</option>
+                      ))}
+                    </select>
+                    <button
+                      onClick={() => setShowNewLexiconModal(true)}
+                      className="w-[60px] h-11 flex items-center justify-center text-base rounded-lg font-medium transition-all duration-200 bg-gray-700 text-white hover:bg-gray-800 focus:ring-2 focus:ring-gray-500 focus:outline-none"
+                    >
+                      New
+                    </button>
+                  </div>
                 </div>
                 <button
                   onClick={handleNewEntry}
@@ -551,21 +619,6 @@ function App() {
                         className="input text-base"
                       />
                     </div>
-
-                    <button
-                      onClick={handleSaveLexicon}
-                      disabled={saving || !hasUnsavedChanges}
-                      className="btn btn-primary w-full px-4 py-2 text-base disabled:opacity-50 disabled:cursor-not-allowed"
-                    >
-                      {saving ? 'Saving...' : 'Save Lexicon'}
-                    </button>
-
-                    {saveSuccess && (
-                      <div className="text-green-500 text-sm mt-2">{saveSuccess}</div>
-                    )}
-                    {saveError && (
-                      <div className="text-red-500 text-sm mt-2">{saveError}</div>
-                    )}
                   </div>
                 ) : (
                   <div className="flex items-center justify-center h-full text-gray-400 text-sm text-center">
@@ -617,6 +670,53 @@ function App() {
                     ))}
                   </div>
                 )}
+              </div>
+            </div>
+          </>
+        )}
+
+        {/* New Lexicon Modal */}
+        {showNewLexiconModal && (
+          <>
+            <div className="modal-backdrop" onClick={() => setShowNewLexiconModal(false)} />
+            <div className="modal-container">
+              <div className="modal-content">
+                <h2 className="text-xl font-semibold mb-4">Create New Lexicon</h2>
+                <div className="space-y-4">
+                  <div>
+                    <label htmlFor="new-lexicon-name" className="block text-sm font-medium text-gray-700 mb-1">
+                      Lexicon Name
+                    </label>
+                    <input
+                      type="text"
+                      id="new-lexicon-name"
+                      value={newLexiconName}
+                      onChange={(e) => setNewLexiconName(e.target.value)}
+                      placeholder="Enter lexicon name (e.g., my-lexicon.xml)"
+                      className="w-full p-2.5 rounded-lg border border-gray-300 text-gray-800 focus:ring-2 focus:ring-gray-500 focus:border-gray-500 bg-white text-base shadow-sm"
+                    />
+                    <p className="mt-1 text-xs text-gray-500">
+                      Lexicon names must use only letters, numbers, hyphens, and underscores. The <code>.xml</code> extension will be added automatically if omitted.
+                    </p>
+                    {newLexiconError && (
+                      <p className="mt-1 text-sm text-red-500">{newLexiconError}</p>
+                    )}
+                  </div>
+                  <div className="flex justify-end gap-3">
+                    <button
+                      onClick={() => setShowNewLexiconModal(false)}
+                      className="px-4 py-2 text-base rounded-lg font-medium transition-all duration-200 bg-gray-100 text-gray-700 hover:bg-gray-200 focus:ring-2 focus:ring-gray-500 focus:outline-none"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      onClick={handleCreateNewLexicon}
+                      className="px-4 py-2 text-base rounded-lg font-medium transition-all duration-200 bg-gray-700 text-white hover:bg-gray-800 focus:ring-2 focus:ring-gray-500 focus:outline-none"
+                    >
+                      Create
+                    </button>
+                  </div>
+                </div>
               </div>
             </div>
           </>
