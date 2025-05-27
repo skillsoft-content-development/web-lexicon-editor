@@ -38,11 +38,18 @@ function App() {
   const [activeTooltip, setActiveTooltip] = useState<string | null>(null);
 
   // Backend API endpoints
-  const BACKEND_URL = 'http://localhost:4000';
+  const BACKEND_URL = process.env.NODE_ENV === 'production' 
+    ? '/api'  // In production, use relative path to Vercel API
+    : 'http://localhost:4000';
 
   async function listBlobsFromBackend() {
     try {
-      const response = await fetch(`${BACKEND_URL}/api/blobs`);
+      const apiKey = localStorage.getItem('azureStorageKey');
+      const response = await fetch(`${BACKEND_URL}/blobs`, {
+        headers: {
+          'x-api-key': apiKey || ''
+        }
+      });
       if (response.status === 401) throw new Error('API key not set');
       if (!response.ok) {
         const errorText = await response.text();
@@ -59,14 +66,19 @@ function App() {
   }
 
   async function downloadBlobFromBackend(blobName: string) {
-    const response = await fetch(`${BACKEND_URL}/api/blob/${encodeURIComponent(blobName)}`);
+    const apiKey = localStorage.getItem('azureStorageKey');
+    const response = await fetch(`${BACKEND_URL}/blob/${encodeURIComponent(blobName)}`, {
+      headers: {
+        'x-api-key': apiKey || ''
+      }
+    });
     if (response.status === 401) throw new Error('API key not set');
     if (!response.ok) throw new Error('Failed to download blob');
     return await response.text();
   }
 
   async function setApiKeyOnBackend(key: string) {
-    const response = await fetch(`${BACKEND_URL}/api/set-key`, {
+    const response = await fetch(`${BACKEND_URL}/set-key`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ key })
@@ -92,12 +104,14 @@ function App() {
         xmlPreview: xmlString.substring(0, 100) + '...'
       });
 
+      const apiKey = localStorage.getItem('azureStorageKey');
       // Send the XML string to the backend
-      const response = await fetch(`${BACKEND_URL}/api/blob/${encodeURIComponent(blobName)}`, {
+      const response = await fetch(`${BACKEND_URL}/blob/${encodeURIComponent(blobName)}`, {
         method: 'POST',
         headers: { 
           'Content-Type': 'application/xml',
-          'Accept': 'application/json'
+          'Accept': 'application/json',
+          'x-api-key': apiKey || ''
         },
         body: xmlString
       });
