@@ -508,7 +508,7 @@ function App() {
               src={process.env.PUBLIC_URL + '/images/4.jpg'}
               alt="Skillsoft Lexicon Editor header"
               className="absolute inset-0 w-full h-full object-cover rounded-t-xl"
-              style={{height: '120px', width: '100%', objectFit: 'cover'}}
+              style={{height: '120px', width: '100%', objectFit: 'cover', transform: 'scaleX(-1)'}}
               draggable="false"
             />
             <div className="absolute inset-0 rounded-t-xl" style={{background: 'linear-gradient(to right, rgba(17,24,39,0.85) 0%, rgba(17,24,39,0.0) 100%)'}} />
