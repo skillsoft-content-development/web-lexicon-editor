@@ -1,7 +1,6 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import './index.css';
 import { XMLParser, XMLBuilder } from 'fast-xml-parser';
-import { uploadBlob } from './services/blobStorage';
 
 function deepEqual(a: any, b: any) {
   return JSON.stringify(a) === JSON.stringify(b);
@@ -25,7 +24,6 @@ function App() {
   const [newLexiconLang, setNewLexiconLang] = useState('en-US');
   const [blobList, setBlobList] = useState<string[]>([]);
   const [loadingBlobs, setLoadingBlobs] = useState(false);
-  const [loadingFile, setLoadingFile] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [blobErrorDetail, setBlobErrorDetail] = useState<string | null>(null);
   const [showKeyModal, setShowKeyModal] = useState(false);
@@ -33,41 +31,31 @@ function App() {
   const [keyError, setKeyError] = useState<string | null>(null);
   const [validatingKey, setValidatingKey] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [saveSuccess, setSaveSuccess] = useState<string | null>(null);
-  const [saveError, setSaveError] = useState<string | null>(null);
   const [activeTooltip, setActiveTooltip] = useState<string | null>(null);
+  const [isInitialLoad, setIsInitialLoad] = useState(true);
+  const [retryCount, setRetryCount] = useState(0);
+  const MAX_RETRIES = 3;
 
   // Backend API endpoints
   const BACKEND_URL = process.env.NODE_ENV === 'production' 
-    ? '/api'  // In production, use relative path to Vercel API
+    ? ''  // In production, use relative path to Vercel API
     : 'http://localhost:4000';
 
   async function listBlobsFromBackend() {
-    try {
-      const apiKey = localStorage.getItem('azureStorageKey');
-      const response = await fetch(`${BACKEND_URL}/blobs`, {
-        headers: {
-          'x-api-key': apiKey || ''
-        }
-      });
-      if (response.status === 401) throw new Error('API key not set');
-      if (!response.ok) {
-        const errorText = await response.text();
-        throw new Error(`Failed to list blobs: ${response.status} ${response.statusText} - ${errorText}`);
+    const apiKey = localStorage.getItem('azureStorageKey');
+    const response = await fetch(`${BACKEND_URL}/api/blobs`, {
+      headers: {
+        'x-api-key': apiKey || ''
       }
-      return await response.json();
-    } catch (e) {
-      console.error('Error listing blobs:', e);
-      if (e instanceof TypeError && e.message === 'Failed to fetch') {
-        throw new Error('Cannot connect to backend server. Please ensure it is running at ' + BACKEND_URL);
-      }
-      throw e;
-    }
+    });
+    if (response.status === 401) throw new Error('API key not set');
+    if (!response.ok) throw new Error('Failed to list blobs');
+    return await response.json();
   }
 
   async function downloadBlobFromBackend(blobName: string) {
     const apiKey = localStorage.getItem('azureStorageKey');
-    const response = await fetch(`${BACKEND_URL}/blob/${encodeURIComponent(blobName)}`, {
+    const response = await fetch(`${BACKEND_URL}/api/blob/${encodeURIComponent(blobName)}`, {
       headers: {
         'x-api-key': apiKey || ''
       }
@@ -78,7 +66,7 @@ function App() {
   }
 
   async function setApiKeyOnBackend(key: string) {
-    const response = await fetch(`${BACKEND_URL}/set-key`, {
+    const response = await fetch(`${BACKEND_URL}/api/set-key`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ key })
@@ -106,7 +94,7 @@ function App() {
 
       const apiKey = localStorage.getItem('azureStorageKey');
       // Send the XML string to the backend
-      const response = await fetch(`${BACKEND_URL}/blob/${encodeURIComponent(blobName)}`, {
+      const response = await fetch(`${BACKEND_URL}/api/blob/${encodeURIComponent(blobName)}`, {
         method: 'POST',
         headers: { 
           'Content-Type': 'application/xml',
@@ -146,76 +134,74 @@ function App() {
     return true;
   };
 
-  // On mount, check if backend has API key by trying to list blobs
+  // useEffect for document title (always at top level)
   useEffect(() => {
-    (async () => {
-      try {
-        if (!checkApiKey()) return;
-        // Try to fetch blob list on mount if API key is valid
-        setLoadingBlobs(true);
-        const blobs = await listBlobsFromBackend();
-        setBlobList(blobs);
-        setLoadingBlobs(false);
-      } catch (e: any) {
-        setLoadingBlobs(false);
-        if (e.message === 'API key not set') {
-          setShowKeyModal(true);
-        }
-      }
-    })();
+    if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
+      document.title = '(local) Skillsoft Lexicon Editor';
+    } else {
+      document.title = 'Skillsoft Lexicon Editor';
+    }
   }, []);
 
-  // After setting a valid key, fetch blob list and close modal
-  const handleSetKey = async () => {
-    setValidatingKey(true);
-    setKeyError(null);
-    try {
-      await setApiKeyOnBackend(keyInput.trim());
-      localStorage.setItem('azureStorageKey', keyInput.trim());
-      setShowKeyModal(false);
-      setKeyInput('');
-      // Fetch blob list after setting key
-      setLoadingBlobs(true);
-      const blobs = await listBlobsFromBackend();
-      setBlobList(blobs);
-      setLoadingBlobs(false);
-    } catch (e: any) {
-      setKeyError('Failed to set API key.');
-      setLoadingBlobs(false);
-    }
-    setValidatingKey(false);
-  };
+  // useEffect for API key check and blob list
+  useEffect(() => {
+    let mounted = true;
+    let timeoutId: NodeJS.Timeout;
 
-  // After resetting the key, show modal and clear blob list
-  const handleResetKey = async () => {
-    await resetApiKeyOnBackend();
-    localStorage.removeItem('azureStorageKey');
-    setShowKeyModal(true);
-    setKeyInput('');
-    setBlobList([]);
-    setCurrentFile('');
-    setEntries([]);
-    setSelectedIndex(null);
-  };
+    const loadBlobs = async () => {
+      if (!checkApiKey()) return;
+      
+      try {
+        setLoadingBlobs(true);
+        const blobs = await listBlobsFromBackend();
+        if (mounted) {
+          setBlobList(blobs);
+          setError(null);
+          setBlobErrorDetail(null);
+          setIsInitialLoad(false);
+        }
+      } catch (e: any) {
+        if (mounted) {
+          console.error('Error loading blobs:', e);
+          if (e.message === 'API key not set') {
+            setShowKeyModal(true);
+          } else if (retryCount < MAX_RETRIES) {
+            // Retry after a delay
+            timeoutId = setTimeout(() => {
+              setRetryCount(prev => prev + 1);
+            }, 1000 * (retryCount + 1)); // Exponential backoff
+          } else {
+            setError('Failed to load blobs. Please try again.');
+            setBlobErrorDetail(e.message);
+          }
+        }
+      } finally {
+        if (mounted) {
+          setLoadingBlobs(false);
+        }
+      }
+    };
+
+    loadBlobs();
+
+    return () => {
+      mounted = false;
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
+    };
+  }, [retryCount]); // Only depend on retryCount
 
   const handleOpenLexicon = async () => {
     if (!checkApiKey()) return;
     setShowFileModal(true);
-    setLoadingBlobs(true);
     setError(null);
     setBlobErrorDetail(null);
-    try {
-      const blobs = await listBlobsFromBackend();
-      setBlobList(blobs);
-    } catch (e: any) {
-      setError('Failed to list blobs.');
-      setBlobErrorDetail(e && e.message ? e.message : String(e));
-    }
-    setLoadingBlobs(false);
+    setRetryCount(0); // Reset retry count when manually opening
   };
 
   const handleSelectBlob = async (blobName: string) => {
-    setLoadingFile(true);
+    setLoadingBlobs(true);
     setError(null);
     try {
       const xmlString = await downloadBlobFromBackend(blobName);
@@ -239,7 +225,7 @@ function App() {
     } catch (e) {
       setError('Failed to download or parse the file.');
     }
-    setLoadingFile(false);
+    setLoadingBlobs(false);
   };
 
   const handleNewEntry = () => {
@@ -302,12 +288,10 @@ function App() {
   const handleSaveLexicon = async () => {
     if (!checkApiKey()) return;
     if (!currentFile) {
-      setSaveError('No file loaded.');
+      setError('No file loaded.');
       return;
     }
     setSaving(true);
-    setSaveSuccess(null);
-    setSaveError(null);
     try {
       // Build XML from state
       const builder = new XMLBuilder({ 
@@ -372,11 +356,10 @@ function App() {
       }
       
       await saveLexicon(currentFile, xmlString);
-      setSaveSuccess('Lexicon saved successfully!');
       setSavedEntries(entries);
     } catch (e: any) {
       console.error('Save error:', e);
-      setSaveError(e.message || 'Failed to save lexicon.');
+      setError(e.message || 'Failed to save lexicon.');
     }
     setSaving(false);
   };
@@ -423,8 +406,6 @@ function App() {
     setSavedEntries([]); // Empty saved entries to indicate unsaved state
     setSelectedIndex(0);
     setCurrentFile(finalName);
-    setSaveSuccess(null);
-    setSaveError(null);
 
     // Add spoof entry to blobList if not present
     setBlobList((prev) => prev.includes(finalName) ? prev : [finalName, ...prev]);
@@ -446,8 +427,6 @@ function App() {
     setSavedEntries([]); // Mark as unsaved
     setSelectedIndex(duplicatedEntries.length > 0 ? 0 : null);
     setCurrentFile(newName);
-    setSaveSuccess(null);
-    setSaveError(null);
     setBlobList((prev) => prev.includes(newName) ? prev : [newName, ...prev]);
     setNewLexiconName(newName); // Pre-populate save dialog with this name
   };
@@ -485,7 +464,24 @@ function App() {
                 Cancel
               </button>
               <button
-                onClick={handleSetKey}
+                onClick={async () => {
+                  setValidatingKey(true);
+                  setKeyError(null);
+                  try {
+                    await setApiKeyOnBackend(keyInput.trim());
+                    localStorage.setItem('azureStorageKey', keyInput.trim());
+                    setShowKeyModal(false);
+                    setKeyInput('');
+                    setLoadingBlobs(true);
+                    const blobs = await listBlobsFromBackend();
+                    setBlobList(blobs);
+                    setLoadingBlobs(false);
+                  } catch (e: any) {
+                    setKeyError('Failed to set API key.');
+                    setLoadingBlobs(false);
+                  }
+                  setValidatingKey(false);
+                }}
                 disabled={validatingKey}
                 className="btn btn-primary"
               >
@@ -525,7 +521,7 @@ function App() {
         <div className="flex flex-col w-full px-0 py-0.5 border-b border-gray-200 bg-white sticky top-0 z-10">
           {/* Button Row + File Info Row */}
           <div className="flex items-center w-full">
-            {/* Left group: Open, New, Save, Duplicate */}
+            {/* Left group: Open, Save, New, Duplicate */}
             <div className="flex items-center gap-4 ml-6">
               <div className="flex flex-col items-center">
                 <button
@@ -539,16 +535,6 @@ function App() {
               </div>
               <div className="flex flex-col items-center">
                 <button
-                  onClick={() => setShowNewLexiconModal(true)}
-                  className="w-9 h-9 flex items-center justify-center text-base rounded-lg font-medium transition-all duration-200 text-gray-700 hover:bg-gray-100 focus:ring-2 focus:ring-gray-500 focus:outline-none"
-                  style={{ minWidth: '36px', minHeight: '36px', maxWidth: '36px', maxHeight: '36px' }}
-                >
-                  <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" /></svg>
-                </button>
-                <span className="w-10 text-[10px] leading-tight text-center mt-0.5 mb-1 text-gray-600">New</span>
-              </div>
-              <div className="flex flex-col items-center">
-                <button
                   onClick={handleSaveLexicon}
                   disabled={saving || !hasUnsavedChanges}
                   className="w-9 h-9 flex items-center justify-center text-base rounded-lg font-medium transition-all duration-200 text-gray-700 hover:bg-gray-100 focus:ring-2 focus:ring-gray-500 focus:outline-none disabled:opacity-50 disabled:cursor-not-allowed"
@@ -559,6 +545,17 @@ function App() {
                   </svg>
                 </button>
                 <span className="w-10 text-[10px] leading-tight text-center mt-0.5 mb-1 text-gray-600">Save</span>
+              </div>
+              <div className="h-8 w-px bg-gray-300 mx-2" style={{alignSelf: 'center'}} />
+              <div className="flex flex-col items-center">
+                <button
+                  onClick={() => setShowNewLexiconModal(true)}
+                  className="w-9 h-9 flex items-center justify-center text-base rounded-lg font-medium transition-all duration-200 text-gray-700 hover:bg-gray-100 focus:ring-2 focus:ring-gray-500 focus:outline-none"
+                  style={{ minWidth: '36px', minHeight: '36px', maxWidth: '36px', maxHeight: '36px' }}
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" /></svg>
+                </button>
+                <span className="w-10 text-[10px] leading-tight text-center mt-0.5 mb-1 text-gray-600">New</span>
               </div>
               <div className="flex flex-col items-center">
                 <button
@@ -835,10 +832,18 @@ function App() {
         {/* Reset API Key at the bottom */}
         <div className="flex justify-end items-center px-8 py-5 border-t border-gray-100 bg-white">
           <button
-            onClick={handleResetKey}
+            onClick={async () => {
+              await resetApiKeyOnBackend();
+              localStorage.removeItem('azureStorageKey');
+              setShowKeyModal(true);
+              setKeyInput('');
+              setBlobList([]);
+              setCurrentFile('');
+              setEntries([]);
+              setSelectedIndex(null);
+            }}
             className="flex items-center gap-2 text-gray-600 hover:text-gray-800 hover:bg-gray-100 px-5 py-2.5 rounded-lg text-base font-medium focus:outline-none focus:ring-2 focus:ring-gray-500 transition"
-            style={{fontFamily: 'inherit', fontSize: '16px'}}
-          >
+            style={{fontFamily: 'inherit', fontSize: '16px'}}>
             <span className="inline-block align-middle" style={{fontSize: '16px', lineHeight: 1, marginRight: '2px'}}>&#9881;</span>
             Reset API Key
           </button>
@@ -862,13 +867,26 @@ function App() {
                   </button>
                 </div>
                 {loadingBlobs ? (
-                  <div className="text-center py-4">Loading...</div>
+                  <div className="text-center py-4">
+                    <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-gray-900 mx-auto"></div>
+                    <p className="mt-2 text-gray-600">Loading lexicons...</p>
+                  </div>
                 ) : error ? (
                   <div className="text-red-500 mb-4">
                     {error}
                     {blobErrorDetail && (
                       <div className="text-sm mt-2">{blobErrorDetail}</div>
                     )}
+                    <button
+                      onClick={() => setRetryCount(0)}
+                      className="mt-4 px-4 py-2 bg-gray-100 hover:bg-gray-200 rounded-lg text-gray-700"
+                    >
+                      Retry
+                    </button>
+                  </div>
+                ) : blobList.length === 0 ? (
+                  <div className="text-center py-4 text-gray-500">
+                    No lexicons found. Create a new one to get started.
                   </div>
                 ) : (
                   <div className="space-y-2">
