@@ -12,6 +12,7 @@ This file contains guidelines and rules for any AI or human making changes to th
 - **Non-Intrusive:** Avoid changes that would disrupt the current user experience or workflow unless specifically requested.
 - **Documentation:** Document any significant changes or new features in the README or relevant files in relatively short-form.
 - **Existing Code:** If any existing code violates any of these, it is acceptable to point it out, but do not change it without being explicitly told. (Unless it is objectively wrong, provably fixable, and non-intrusive to fix.)
+- **Vercel:** As of right now, vercel is not linked with the github repository; when we commit to git and ask for deployment, it still needs to happen as a separate vercel --prod command.
 
 ## How to Use
 - Before making changes, read and follow these constraints.
