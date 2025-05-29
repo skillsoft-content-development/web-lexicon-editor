@@ -372,6 +372,71 @@ function App() {
     setSaving(false);
   };
 
+  const handleExportXML = () => {
+    if (!currentFile) {
+      setError('No file loaded.');
+      return;
+    }
+
+    try {
+      // Build XML from state using the same logic as save
+      const builder = new XMLBuilder({ 
+        ignoreAttributes: false,
+        format: true,
+        attributeNamePrefix: '@_',
+        suppressBooleanAttributes: false,
+        indentBy: '    ',
+        processEntities: true,
+        suppressEmptyNode: false
+      });
+      
+      const lexemeXml = entries.map(entry => {
+        const lexeme: any = {
+          grapheme: entry.graphemes
+        };
+        if (entry.alias) {
+          lexeme.alias = entry.alias;
+        }
+        if (entry.phoneme) {
+          lexeme.phoneme = entry.phoneme;
+        }
+        return lexeme;
+      });
+
+      const xmlObj = {
+        '?xml': {
+          '@_version': '1.0',
+          '@_encoding': 'utf-8'
+        },
+        lexicon: {
+          '@_version': '1.0',
+          '@_xmlns': 'http://www.w3.org/2005/01/pronunciation-lexicon',
+          '@_xmlns:xsi': 'http://www.w3.org/2001/XMLSchema-instance',
+          '@_xsi:schemaLocation': 'http://www.w3.org/2005/01/pronunciation-lexicon         http://www.w3.org/TR/2007/CR-pronunciation-lexicon-20071212/pls.xsd',
+          '@_alphabet': 'ipa',
+          '@_xml:lang': newLexiconLang || 'en-US',
+          lexeme: lexemeXml
+        }
+      };
+
+      const xmlString = builder.build(xmlObj);
+      
+      // Create a blob and download link
+      const blob = new Blob([xmlString], { type: 'application/xml' });
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = currentFile;
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(url);
+      document.body.removeChild(a);
+    } catch (e: any) {
+      console.error('Export error:', e);
+      setError(e.message || 'Failed to export lexicon.');
+    }
+  };
+
   // Determine if there are unsaved changes
   const hasUnsavedChanges = !deepEqual(entries, savedEntries);
 
@@ -503,7 +568,7 @@ function App() {
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-b from-gray-50 to-gray-100 py-8">
+    <div className="min-h-screen bg-gradient-to-b from-gray-50 to-gray-100 py-8 px-8">
       <div className={`max-w-[900px] mx-auto bg-white rounded-xl shadow-2xl border border-gray-100 overflow-hidden flex flex-col ${!currentFile ? 'h-[664px]' : ''}`}>
         {/* Header Section */}
         <div className="relative h-[120px] flex items-center justify-between px-6" style={{height: '120px', paddingLeft: '24px', paddingRight: '24px'}}>
@@ -554,6 +619,19 @@ function App() {
                 </button>
                 <span className="w-10 text-[10px] leading-tight text-center mt-0.5 mb-1 text-gray-600">Save</span>
               </div>
+              <div className="flex flex-col items-center">
+                <button
+                  onClick={handleExportXML}
+                  disabled={!currentFile}
+                  className="w-9 h-9 flex items-center justify-center text-base rounded-lg font-medium transition-all duration-200 text-gray-700 hover:bg-gray-100 focus:ring-2 focus:ring-gray-500 focus:outline-none disabled:opacity-50 disabled:cursor-not-allowed"
+                  style={{ minWidth: '36px', minHeight: '36px', maxWidth: '36px', maxHeight: '36px' }}
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                  </svg>
+                </button>
+                <span className="w-10 text-[10px] leading-tight text-center mt-0.5 mb-1 text-gray-600">Export</span>
+              </div>
               <div className="h-8 w-px bg-gray-300 mx-2" style={{alignSelf: 'center'}} />
               <div className="flex flex-col items-center">
                 <button
@@ -584,6 +662,25 @@ function App() {
                 </span>
               </div>
             )}
+            {/* Reset API Key Button */}
+            <div className="flex items-center ml-auto mr-6">
+              <button
+                onClick={async () => {
+                  await resetApiKeyOnBackend();
+                  localStorage.removeItem('azureStorageKey');
+                  setShowKeyModal(true);
+                  setKeyInput('');
+                  setBlobList([]);
+                  setCurrentFile('');
+                  setEntries([]);
+                  setSelectedIndex(null);
+                }}
+                className="flex items-center gap-2 text-gray-600 hover:text-gray-800 hover:bg-gray-100 px-3 py-1.5 rounded-lg text-sm font-medium focus:outline-none focus:ring-2 focus:ring-gray-500 transition"
+                style={{fontFamily: 'inherit'}}>
+                <span className="inline-block align-middle" style={{fontSize: '14px', lineHeight: 1, marginRight: '2px'}}>&#9881;</span>
+                Reset API Key
+              </button>
+            </div>
           </div>
         </div>
 
@@ -835,26 +932,6 @@ function App() {
               </div>
             </main>
           </div>
-        </div>
-
-        {/* Reset API Key at the bottom */}
-        <div className="flex justify-end items-center px-8 py-5 border-t border-gray-100 bg-white">
-          <button
-            onClick={async () => {
-              await resetApiKeyOnBackend();
-              localStorage.removeItem('azureStorageKey');
-              setShowKeyModal(true);
-              setKeyInput('');
-              setBlobList([]);
-              setCurrentFile('');
-              setEntries([]);
-              setSelectedIndex(null);
-            }}
-            className="flex items-center gap-2 text-gray-600 hover:text-gray-800 hover:bg-gray-100 px-5 py-2.5 rounded-lg text-base font-medium focus:outline-none focus:ring-2 focus:ring-gray-500 transition"
-            style={{fontFamily: 'inherit', fontSize: '16px'}}>
-            <span className="inline-block align-middle" style={{fontSize: '16px', lineHeight: 1, marginRight: '2px'}}>&#9881;</span>
-            Reset API Key
-          </button>
         </div>
 
         {/* File Selection Modal */}
