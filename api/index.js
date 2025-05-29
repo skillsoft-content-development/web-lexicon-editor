@@ -7,12 +7,28 @@ function getConnectionString(accountKey) {
   return `DefaultEndpointsProtocol=https;AccountName=${ACCOUNT_NAME};AccountKey=${accountKey};EndpointSuffix=core.windows.net`;
 }
 
+// Helper function to parse request body
+async function parseBody(req) {
+  return new Promise((resolve, reject) => {
+    let body = '';
+    req.on('data', chunk => {
+      body += chunk.toString();
+    });
+    req.on('end', () => {
+      resolve(body);
+    });
+    req.on('error', (err) => {
+      reject(err);
+    });
+  });
+}
+
 module.exports = async (req, res) => {
   // Set CORS headers for all responses
   res.setHeader('Access-Control-Allow-Credentials', true);
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Accept');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Accept, x-api-key');
 
   // Handle preflight requests
   if (req.method === 'OPTIONS') {
@@ -32,7 +48,8 @@ module.exports = async (req, res) => {
 
     // Handle different endpoints
     if (path === '/api/set-key' && req.method === 'POST') {
-      const { key } = req.body;
+      const body = await parseBody(req);
+      const { key } = JSON.parse(body);
       if (!key) {
         return res.status(400).json({ error: 'API key is required' });
       }
@@ -70,10 +87,11 @@ module.exports = async (req, res) => {
       const containerClient = blobServiceClient.getContainerClient(CONTAINER_NAME);
       const blobClient = containerClient.getBlobClient(decodeURIComponent(blobName));
       
-      const xmlContent = Buffer.isBuffer(req.body) ? req.body.toString('utf-8') : req.body;
+      // Parse the request body
+      const xmlContent = await parseBody(req);
       
-      if (typeof xmlContent !== 'string') {
-        throw new Error(`Invalid request body type: ${typeof xmlContent}`);
+      if (!xmlContent || typeof xmlContent !== 'string') {
+        throw new Error(`Invalid request body: ${xmlContent}`);
       }
       
       const blockBlobClient = blobClient.getBlockBlobClient();

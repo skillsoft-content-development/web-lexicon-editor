@@ -1,3 +1,11 @@
+/**
+ * Lexicon Editor Application
+ * 
+ * IMPORTANT: Before making any changes to this codebase, please review the AI_CONSTRAINTS.md file
+ * in the root directory. It contains important guidelines and rules that must be followed
+ * when modifying this application.
+ */
+
 import React, { useState, useEffect } from 'react';
 import './index.css';
 import { XMLParser, XMLBuilder } from 'fast-xml-parser';

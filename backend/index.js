@@ -7,14 +7,24 @@ const app = express();
 
 // Configure CORS with specific options
 app.use(cors({
-  origin: ['http://localhost:3000', 'http://127.0.0.1:3000'], // Add your frontend URL
-  methods: ['GET', 'POST'],
-  allowedHeaders: ['Content-Type', 'Accept']
+  origin: [
+    'http://localhost:3000',
+    'http://127.0.0.1:3000',
+    'https://lexicon-editor-i8o6tljfr-colinrice2s-projects.vercel.app',
+    'https://lexicon-editor.vercel.app'
+  ],
+  methods: ['GET', 'POST', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Accept', 'x-api-key'],
+  credentials: true,
+  preflightContinue: false,
+  optionsSuccessStatus: 204
 }));
 
+// Handle OPTIONS requests explicitly
+app.options('*', cors());
+
 // Configure middleware
-app.use(express.json());
-app.use(express.raw({ type: ['text/plain', 'application/xml'], limit: '10mb' }));
+app.use(bodyParser.json());
 app.use(bodyParser.text({ type: ['text/plain', 'application/xml'] }));
 
 // Add error handling middleware
@@ -34,7 +44,12 @@ function getConnectionString() {
 }
 
 app.post('/api/set-key', (req, res) => {
+  console.log('Setting API key:', req.body);
+  if (!req.body || !req.body.key) {
+    return res.status(400).json({ error: 'API key is required' });
+  }
   ACCOUNT_KEY = req.body.key;
+  console.log('API key set successfully');
   res.json({ success: true });
 });
 
@@ -54,6 +69,7 @@ app.get('/api/blobs', async (req, res) => {
     }
     res.json(blobNames);
   } catch (err) {
+    console.error('Error listing blobs:', err);
     res.status(500).json({ error: err.message });
   }
 });
@@ -73,6 +89,7 @@ app.get('/api/blob/:name', async (req, res) => {
     res.set('Content-Type', 'application/xml');
     res.send(buffer.toString('utf-8'));
   } catch (err) {
+    console.error('Error downloading blob:', err);
     res.status(500).json({ error: err.message });
   }
 });
