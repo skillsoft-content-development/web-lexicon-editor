@@ -43,6 +43,8 @@ function App() {
   const [isInitialLoad, setIsInitialLoad] = useState(true);
   const [retryCount, setRetryCount] = useState(0);
   const MAX_RETRIES = 3;
+  const [searchExpanded, setSearchExpanded] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
 
   // Backend API endpoints
   const BACKEND_URL = process.env.NODE_ENV === 'production' 
@@ -504,6 +506,20 @@ function App() {
     setNewLexiconName(newName); // Pre-populate save dialog with this name
   };
 
+  // Filtered entries based on search
+  const filteredEntries = searchQuery.trim() === ''
+    ? entries.map((entry, idx) => ({ entry, originalIndex: idx }))
+    : entries
+        .map((entry, idx) => ({ entry, originalIndex: idx }))
+        .filter(({ entry }) => {
+          const q = searchQuery.toLowerCase();
+          return (
+            entry.graphemes.some(g => g.toLowerCase().includes(q)) ||
+            (entry.alias && entry.alias.toLowerCase().includes(q)) ||
+            (entry.phoneme && entry.phoneme.toLowerCase().includes(q))
+          );
+        });
+
   // Shared style for all input-like elements
   const unifiedInputStyle = { height: '36px', minHeight: '36px', maxHeight: '36px', borderRadius: '0.5rem', padding: '0 1rem', fontSize: '0.875rem', lineHeight: '1.5' };
   const unifiedButtonStyle = { minWidth: '36px', minHeight: '36px', maxWidth: '36px', maxHeight: '36px' };
@@ -726,38 +742,76 @@ function App() {
               <div className={`flex-1 rounded-lg bg-gray-50 border border-gray-200 min-h-[220px] p-0 relative ${entries.length > 0 ? 'overflow-y-auto' : ''}`} style={{display: 'flex', flexDirection: 'column'}}>
                 <div className="mb-2 flex justify-end items-center p-4" style={{minHeight: '56px'}}>
                   {currentFile && (
-                    <div className="flex gap-2">
-                      <button
-                        onClick={handleNewEntry}
-                        disabled={!currentFile}
-                        className="flex items-center justify-center text-base rounded-lg font-medium transition-all duration-200 text-gray-700 hover:bg-gray-100 focus:ring-2 focus:ring-gray-500 focus:outline-none border border-gray-300 disabled:opacity-70 disabled:cursor-not-allowed"
-                        style={unifiedButtonStyle}
-                      >
-                        <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" /></svg>
-                      </button>
-                      <button
-                        onClick={handleDeleteEntry}
-                        disabled={!currentFile || selectedIndex === null}
-                        className="flex items-center justify-center text-base rounded-lg font-medium transition-all duration-200 bg-red-200 text-red-700 hover:bg-red-300 focus:ring-2 focus:ring-red-500 focus:outline-none border border-red-200 disabled:opacity-70 disabled:cursor-not-allowed"
-                        style={unifiedButtonStyle}
-                      >
-                        <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6M1 7h22" /></svg>
-                      </button>
-                    </div>
+                    <>
+                      <div className="flex gap-2">
+                        <button
+                          onClick={handleNewEntry}
+                          disabled={!currentFile}
+                          className="flex items-center justify-center text-base rounded-lg font-medium transition-all duration-200 text-gray-700 hover:bg-gray-100 focus:ring-2 focus:ring-gray-500 focus:outline-none border border-gray-300 disabled:opacity-70 disabled:cursor-not-allowed"
+                          style={unifiedButtonStyle}
+                        >
+                          <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" /></svg>
+                        </button>
+                        <button
+                          onClick={handleDeleteEntry}
+                          disabled={!currentFile || selectedIndex === null}
+                          className="flex items-center justify-center text-base rounded-lg font-medium transition-all duration-200 bg-red-200 text-red-700 hover:bg-red-300 focus:ring-2 focus:ring-red-500 focus:outline-none border border-red-200 disabled:opacity-70 disabled:cursor-not-allowed"
+                          style={unifiedButtonStyle}
+                        >
+                          <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6M1 7h22" /></svg>
+                        </button>
+                      </div>
+                      {/* Collapsible Search Bar */}
+                      <div className="ml-auto flex items-center" style={{transition: 'width 0.2s'}}>
+                        <div className="flex items-center" style={{height: '36px'}}>
+                          {searchExpanded && (
+                            <div className="flex items-center bg-gray-200 rounded-lg px-2 mr-2" style={{height: '36px', maxWidth: 260, transition: 'max-width 0.2s'}}>
+                              {searchQuery && (
+                                <button
+                                  onClick={() => setSearchQuery('')}
+                                  className="mr-1 flex items-center justify-center rounded-lg text-gray-500 hover:text-gray-700 focus:outline-none"
+                                  style={{width: '32px', height: '32px'}}
+                                  tabIndex={-1}
+                                >
+                                  <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
+                                </button>
+                              )}
+                              <input
+                                type="text"
+                                value={searchQuery}
+                                onChange={e => setSearchQuery(e.target.value)}
+                                autoFocus
+                                placeholder="Search..."
+                                className="bg-transparent outline-none border-none text-gray-900 flex-1 px-1 min-w-0"
+                                style={{fontSize: '15px', height: '32px'}}
+                              />
+                            </div>
+                          )}
+                          <button
+                            onClick={() => setSearchExpanded(v => !v)}
+                            className={`flex items-center justify-center rounded-lg border border-gray-300 focus:outline-none ml-2 ${searchExpanded ? 'bg-gray-700 text-white hover:bg-gray-900' : 'bg-gray-100 text-gray-500 hover:bg-gray-200 hover:text-gray-700'}`}
+                            style={{width: '36px', height: '36px', minWidth: '36px', minHeight: '36px', maxWidth: '36px', maxHeight: '36px', transition: 'background 0.2s'}}
+                            aria-label="Toggle search"
+                          >
+                            <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 20 20" stroke="currentColor"><circle cx="10" cy="10" r="7" stroke="currentColor" strokeWidth="2" fill="none"/><line x1="15" y1="15" x2="19" y2="19" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/></svg>
+                          </button>
+                        </div>
+                      </div>
+                    </>
                   )}
                 </div>
-                {entries.length === 0 ? (
+                {filteredEntries.length === 0 ? (
                   <div style={{position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', pointerEvents: 'none'}}>
                     <span className="text-gray-400 text-sm text-center">No entries</span>
                   </div>
                 ) : (
-                  entries.map((entry, index) => (
+                  filteredEntries.map(({ entry, originalIndex }) => (
                     <div
-                      key={index}
-                      onClick={() => setSelectedIndex(index)}
+                      key={originalIndex}
+                      onClick={() => setSelectedIndex(originalIndex)}
                       className={`cursor-pointer text-base transition-all duration-200 border-y mb-0 last:mb-0 px-4 py-2"
-                         style={{...entryBoxStyle, ...(selectedIndex === index ? {background: '#374151', color: 'white', border: '#374151 1px solid'} : {background: 'white', color: '#1f2937', border: '#e5e7eb 1px solid'})}}
-                          ${selectedIndex === index
+                         style={{...entryBoxStyle, ...(selectedIndex === originalIndex ? {background: '#374151', color: 'white', border: '#374151 1px solid'} : {background: 'white', color: '#1f2937', border: '#e5e7eb 1px solid'})}}
+                          ${selectedIndex === originalIndex
                             ? 'border-gray-700'
                             : 'hover:bg-gray-100 border-gray-200'
                           }`}
