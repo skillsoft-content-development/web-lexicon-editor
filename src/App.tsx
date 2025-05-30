@@ -6,7 +6,7 @@
  * when modifying this application.
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import './index.css';
 import { XMLParser, XMLBuilder } from 'fast-xml-parser';
 
@@ -45,6 +45,17 @@ function App() {
   const MAX_RETRIES = 3;
   const [searchExpanded, setSearchExpanded] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [showImportModal, setShowImportModal] = useState(false);
+  const [pendingImportFile, setPendingImportFile] = useState<File | null>(null);
+  const [showImportSavePrompt, setShowImportSavePrompt] = useState(false);
+  const [pendingLexiconSwitch, setPendingLexiconSwitch] = useState<null | (() => void)>(null);
+  const [toast, setToast] = useState<{ type: 'success' | 'error', message: string } | null>(null);
+  const [showSaveAsModal, setShowSaveAsModal] = useState(false);
+  const [saveAsName, setSaveAsName] = useState('');
+  const [saveAsError, setSaveAsError] = useState('');
+  const [showOverwriteModal, setShowOverwriteModal] = useState(false);
+  const [pendingSaveAsName, setPendingSaveAsName] = useState('');
 
   // Backend API endpoints
   const BACKEND_URL = process.env.NODE_ENV === 'production' 
@@ -202,21 +213,115 @@ function App() {
     };
   }, [retryCount]); // Only depend on retryCount
 
-  const handleOpenLexicon = async () => {
-    if (!checkApiKey()) return;
-    setShowFileModal(true);
-    setError(null);
-    setBlobErrorDetail(null);
-    setRetryCount(0); // Reset retry count when manually opening
+  // Save prompt logic for lexicon switching
+  const promptToSaveIfNeeded = (onContinue: () => void) => {
+    if (hasUnsavedChanges) {
+      setPendingLexiconSwitch(() => onContinue);
+      setShowImportModal(true);
+    } else {
+      onContinue();
+    }
   };
 
+  // Modified handleOpenLexicon to prompt
+  const handleOpenLexicon = async () => {
+    promptToSaveIfNeeded(() => {
+      if (!checkApiKey()) return;
+      setShowFileModal(true);
+      setError(null);
+      setBlobErrorDetail(null);
+      setRetryCount(0); // Reset retry count when manually opening
+    });
+  };
+
+  // Modified handleSelectBlob to prompt
   const handleSelectBlob = async (blobName: string) => {
-    setLoadingBlobs(true);
-    setError(null);
+    promptToSaveIfNeeded(async () => {
+      setLoadingBlobs(true);
+      setError(null);
+      try {
+        const xmlString = await downloadBlobFromBackend(blobName);
+        const parser = new XMLParser({ ignoreAttributes: false });
+        const xml = parser.parse(xmlString);
+        const ns = xml.lexicon['@_xmlns'] || xml.lexicon['@_xmlns:xsi'] || '';
+        const lexemes = Array.isArray(xml.lexicon.lexeme)
+          ? xml.lexicon.lexeme
+          : xml.lexicon.lexeme ? [xml.lexicon.lexeme] : [];
+        const parsedEntries = lexemes.map((lex: any) => ({
+          graphemes: Array.isArray(lex.grapheme)
+            ? lex.grapheme.map((g: any) => g) : lex.grapheme ? [lex.grapheme] : [],
+          alias: lex.alias || '',
+          phoneme: lex.phoneme || ''
+        }));
+        setEntries(parsedEntries);
+        setSavedEntries(parsedEntries);
+        setCurrentFile(blobName);
+        setNewLexiconLang(xml.lexicon['@_xml:lang'] || xml.lexicon['@_lang'] || 'en-US');
+        setShowFileModal(false);
+        clearPanelOnLexiconLoad();
+      } catch (e) {
+        setError('Failed to download or parse the file.');
+      }
+      setLoadingBlobs(false);
+    });
+  };
+
+  // Modified handleDuplicateLexicon to prompt
+  const handleDuplicateLexicon = () => {
+    promptToSaveIfNeeded(() => {
+      if (!currentFile) return;
+      const baseName = currentFile.replace(/\.xml$/i, '');
+      const newName = `duplicate-of-${baseName}.xml`;
+      const duplicatedEntries = entries.map(entry => ({
+        graphemes: [...entry.graphemes],
+        alias: entry.alias,
+        phoneme: entry.phoneme
+      }));
+      setEntries(duplicatedEntries);
+      setSavedEntries([]); // Mark as unsaved
+      setCurrentFile(newName);
+      setBlobList((prev) => prev.includes(newName) ? prev : [newName, ...prev]);
+      setNewLexiconName(newName);
+      clearPanelOnLexiconLoad();
+    });
+  };
+
+  // Import handler
+  const handleImportClick = () => {
+    if (hasUnsavedChanges) {
+      setShowImportModal(true);
+    } else {
+      fileInputRef.current?.click();
+    }
+  };
+
+  const handleImportFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      if (hasUnsavedChanges) {
+        setPendingImportFile(file);
+        setShowImportModal(true);
+      } else {
+        importLexiconFile(file);
+      }
+    }
+    // Reset input so same file can be picked again
+    e.target.value = '';
+  };
+
+  const importLexiconFile = async (file: File) => {
     try {
-      const xmlString = await downloadBlobFromBackend(blobName);
+      const text = await file.text();
       const parser = new XMLParser({ ignoreAttributes: false });
-      const xml = parser.parse(xmlString);
+      let xml;
+      try {
+        xml = parser.parse(text);
+      } catch (err) {
+        setError('The imported XML file is malformed or invalid.');
+        setShowImportModal(false);
+        setPendingImportFile(null);
+        return;
+      }
       const ns = xml.lexicon['@_xmlns'] || xml.lexicon['@_xmlns:xsi'] || '';
       const lexemes = Array.isArray(xml.lexicon.lexeme)
         ? xml.lexicon.lexeme
@@ -228,16 +333,29 @@ function App() {
         phoneme: lex.phoneme || ''
       }));
       setEntries(parsedEntries);
-      setSavedEntries(parsedEntries);
-      setSelectedIndex(parsedEntries.length > 0 ? 0 : null);
-      setCurrentFile(blobName);
-      setShowFileModal(false);
+      setSavedEntries([]); // Mark as unsaved so Save is enabled
+      setCurrentFile(file.name);
+      setNewLexiconLang(xml.lexicon['@_xml:lang'] || xml.lexicon['@_lang'] || 'en-US');
+      setShowImportSavePrompt(true);
+      setShowImportModal(false);
+      setPendingImportFile(null);
+      clearPanelOnLexiconLoad();
     } catch (e) {
-      setError('Failed to download or parse the file.');
+      setError('Failed to import or parse the XML file.');
+      setShowImportModal(false);
+      setPendingImportFile(null);
     }
-    setLoadingBlobs(false);
   };
 
+  // When searchQuery changes, clear right panel if searching, and clear selection when search is cleared
+  useEffect(() => {
+    setSelectedIndex(null);
+  }, [searchQuery]);
+
+  // Determine if there are unsaved changes
+  const hasUnsavedChanges = !deepEqual(entries, savedEntries);
+
+  // Restore entry handlers and variables if missing
   const handleNewEntry = () => {
     const newEntry: LexiconEntry = {
       graphemes: ['*** NEW ENTRY ***'],
@@ -252,7 +370,8 @@ function App() {
     if (selectedIndex !== null) {
       const newEntries = entries.filter((_, idx) => idx !== selectedIndex);
       setEntries(newEntries);
-      setSelectedIndex(null);
+      if (newEntries.length === 0) setSelectedIndex(null);
+      else setSelectedIndex(null);
     }
   };
 
@@ -295,7 +414,31 @@ function App() {
     setEntries(newEntries);
   };
 
+  // Filtered entries based on search
+  const filteredEntries = searchQuery.trim() === ''
+    ? entries.map((entry, idx) => ({ entry, originalIndex: idx }))
+    : entries
+        .map((entry, idx) => ({ entry, originalIndex: idx }))
+        .filter(({ entry }) => {
+          const q = searchQuery.toLowerCase();
+          return (
+            entry.graphemes.some(g => g.toLowerCase().includes(q)) ||
+            (entry.alias && entry.alias.toLowerCase().includes(q)) ||
+            (entry.phoneme && entry.phoneme.toLowerCase().includes(q))
+          );
+        });
+
+  // Shared style for all input-like elements
+  const unifiedInputStyle = { height: '36px', minHeight: '36px', maxHeight: '36px', borderRadius: '0.5rem', padding: '0 1rem', fontSize: '0.875rem', lineHeight: '1.5' };
+  const unifiedButtonStyle = { minWidth: '36px', minHeight: '36px', maxWidth: '36px', maxHeight: '36px' };
+  const entryBoxStyle = { ...unifiedInputStyle, background: 'white', border: '1px solid #e5e7eb', marginBottom: '0.5rem', display: 'flex', alignItems: 'center', boxSizing: 'border-box', fontWeight: 400 };
+
+  // Save lexicon handler (restore if missing)
   const handleSaveLexicon = async () => {
+    if (isEmptyLexicon) {
+      setToast({ type: 'error', message: 'Cannot save an empty lexicon.' });
+      return;
+    }
     if (!checkApiKey()) return;
     if (!currentFile) {
       setError('No file loaded.');
@@ -367,13 +510,16 @@ function App() {
       
       await saveLexicon(currentFile, xmlString);
       setSavedEntries(entries);
+      setToast({ type: 'success', message: 'Lexicon saved successfully.' });
     } catch (e: any) {
       console.error('Save error:', e);
       setError(e.message || 'Failed to save lexicon.');
+      setToast({ type: 'error', message: 'Failed to save lexicon.' });
     }
     setSaving(false);
   };
 
+  // Export lexicon handler (restore if missing)
   const handleExportXML = () => {
     if (!currentFile) {
       setError('No file loaded.');
@@ -433,21 +579,15 @@ function App() {
       a.click();
       window.URL.revokeObjectURL(url);
       document.body.removeChild(a);
+      setToast({ type: 'success', message: 'Lexicon exported.' });
     } catch (e: any) {
       console.error('Export error:', e);
       setError(e.message || 'Failed to export lexicon.');
+      setToast({ type: 'error', message: 'Failed to export lexicon.' });
     }
   };
 
-  // Determine if there are unsaved changes
-  const hasUnsavedChanges = !deepEqual(entries, savedEntries);
-
-  // Handle lexicon select change
-  const handleLexiconSelect = (e: React.ChangeEvent<HTMLSelectElement>) => {
-    const blobName = e.target.value;
-    if (blobName) handleSelectBlob(blobName);
-  };
-
+  // Restore handleCreateNewLexicon if missing
   const handleCreateNewLexicon = async () => {
     if (!newLexiconName.trim()) {
       setNewLexiconError('Please enter a lexicon name');
@@ -478,110 +618,87 @@ function App() {
 
     // Clear any existing state and set up the new lexicon
     setEntries([newEntry]);
-    setSavedEntries([]); // Empty saved entries to indicate unsaved state
+    setSavedEntries([]); // Mark as unsaved so Save is enabled
     setSelectedIndex(0);
     setCurrentFile(finalName);
 
     // Add spoof entry to blobList if not present
     setBlobList((prev) => prev.includes(finalName) ? prev : [finalName, ...prev]);
+    clearPanelOnLexiconLoad();
+    // Do NOT call any save/upload logic here.
   };
 
-  // Add the handleDuplicateLexicon function
-  const handleDuplicateLexicon = () => {
-    if (!currentFile) return;
-    // Remove .xml if present for base name
-    const baseName = currentFile.replace(/\.xml$/i, '');
-    const newName = `duplicate-of-${baseName}.xml`;
-    // Deep copy entries
-    const duplicatedEntries = entries.map(entry => ({
-      graphemes: [...entry.graphemes],
-      alias: entry.alias,
-      phoneme: entry.phoneme
-    }));
-    setEntries(duplicatedEntries);
-    setSavedEntries([]); // Mark as unsaved
-    setSelectedIndex(duplicatedEntries.length > 0 ? 0 : null);
+  // Show toast for 3 seconds
+  useEffect(() => {
+    if (toast) {
+      const timer = setTimeout(() => setToast(null), 3000);
+      return () => clearTimeout(timer);
+    }
+  }, [toast]);
+
+  // When loading a new lexicon (open/import/duplicate/new), clear right panel
+  const clearPanelOnLexiconLoad = () => setSelectedIndex(null);
+
+  // Save As handler (updated for overwrite check)
+  const handleSaveAsClick = () => {
+    setSaveAsName(currentFile || '');
+    setSaveAsError('');
+    setShowSaveAsModal(true);
+  };
+
+  const handleSaveAsConfirm = async () => {
+    let newName = saveAsName.trim();
+    if (!newName) {
+      setSaveAsError('Please enter a file name');
+      return;
+    }
+    if (!newName.toLowerCase().endsWith('.xml')) {
+      newName += '.xml';
+    }
+    if (!/^[a-zA-Z0-9-_]+\.xml$/.test(newName)) {
+      setSaveAsError('Name must use only letters, numbers, hyphens, and underscores');
+      return;
+    }
+    if (blobList.includes(newName) && newName !== currentFile) {
+      setPendingSaveAsName(newName);
+      setShowOverwriteModal(true);
+      return;
+    }
+    setShowSaveAsModal(false);
     setCurrentFile(newName);
     setBlobList((prev) => prev.includes(newName) ? prev : [newName, ...prev]);
-    setNewLexiconName(newName); // Pre-populate save dialog with this name
+    await handleSaveLexicon();
+    setToast({ type: 'success', message: `Saved as ${newName}` });
   };
 
-  // Filtered entries based on search
-  const filteredEntries = searchQuery.trim() === ''
-    ? entries.map((entry, idx) => ({ entry, originalIndex: idx }))
-    : entries
-        .map((entry, idx) => ({ entry, originalIndex: idx }))
-        .filter(({ entry }) => {
-          const q = searchQuery.toLowerCase();
-          return (
-            entry.graphemes.some(g => g.toLowerCase().includes(q)) ||
-            (entry.alias && entry.alias.toLowerCase().includes(q)) ||
-            (entry.phoneme && entry.phoneme.toLowerCase().includes(q))
-          );
-        });
+  // Overwrite confirm
+  const handleOverwriteConfirm = async () => {
+    setShowOverwriteModal(false);
+    setShowSaveAsModal(false);
+    setCurrentFile(pendingSaveAsName);
+    setBlobList((prev) => prev.includes(pendingSaveAsName) ? prev : [pendingSaveAsName, ...prev]);
+    await handleSaveLexicon();
+    setToast({ type: 'success', message: `Overwritten: ${pendingSaveAsName}` });
+  };
 
-  // Shared style for all input-like elements
-  const unifiedInputStyle = { height: '36px', minHeight: '36px', maxHeight: '36px', borderRadius: '0.5rem', padding: '0 1rem', fontSize: '0.875rem', lineHeight: '1.5' };
-  const unifiedButtonStyle = { minWidth: '36px', minHeight: '36px', maxWidth: '36px', maxHeight: '36px' };
-  const entryBoxStyle = { ...unifiedInputStyle, background: 'white', border: '1px solid #e5e7eb', marginBottom: '0.5rem', display: 'flex', alignItems: 'center', boxSizing: 'border-box', fontWeight: 400 };
+  // Prevent saving empty lexicon
+  const isOnlyPlaceholder = entries.length === 1 && entries[0].graphemes.length === 1 && entries[0].graphemes[0] === '*** NEW ENTRY ***' && !entries[0].alias && !entries[0].phoneme;
+  const isEmptyLexicon = entries.length === 0 || isOnlyPlaceholder;
 
-  // Block main UI if API key modal is open
-  if (showKeyModal) {
-    return (
-      <>
-        <div className="modal-backdrop" />
-        <div className="modal-container">
-          <div className="modal-content">
-            <h2 className="text-xl font-semibold mb-4">Enter Azure Storage API Key</h2>
-            <div className="form-group">
-              <input
-                type="password"
-                value={keyInput}
-                onChange={(e) => setKeyInput(e.target.value)}
-                className="input"
-                placeholder="Enter your API key"
-              />
-              {keyError && (
-                <div className="form-error">{keyError}</div>
-              )}
-            </div>
-            <div className="flex justify-end gap-2">
-              <button
-                onClick={() => setShowKeyModal(false)}
-                className="btn btn-secondary"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={async () => {
-                  setValidatingKey(true);
-                  setKeyError(null);
-                  try {
-                    await setApiKeyOnBackend(keyInput.trim());
-                    localStorage.setItem('azureStorageKey', keyInput.trim());
-                    setShowKeyModal(false);
-                    setKeyInput('');
-                    setLoadingBlobs(true);
-                    const blobs = await listBlobsFromBackend();
-                    setBlobList(blobs);
-                    setLoadingBlobs(false);
-                  } catch (e: any) {
-                    setKeyError('Failed to set API key.');
-                    setLoadingBlobs(false);
-                  }
-                  setValidatingKey(false);
-                }}
-                disabled={validatingKey}
-                className="btn btn-primary"
-              >
-                {validatingKey ? 'Validating...' : 'Set Key'}
-              </button>
-            </div>
-          </div>
-        </div>
-      </>
-    );
-  }
+  // Ensure modals close on Escape
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        if (showSaveAsModal) setShowSaveAsModal(false);
+        if (showOverwriteModal) setShowOverwriteModal(false);
+        if (showImportModal) setShowImportModal(false);
+        if (showImportSavePrompt) setShowImportSavePrompt(false);
+        if (showNewLexiconModal) setShowNewLexiconModal(false);
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [showSaveAsModal, showOverwriteModal, showImportModal, showImportSavePrompt, showNewLexiconModal]);
 
   return (
     <div className="min-h-screen bg-gradient-to-b from-gray-50 to-gray-100 py-8 px-8">
@@ -637,6 +754,20 @@ function App() {
               </div>
               <div className="flex flex-col items-center">
                 <button
+                  onClick={handleSaveAsClick}
+                  disabled={!currentFile}
+                  className="w-9 h-9 flex items-center justify-center text-base rounded-lg font-medium transition-all duration-200 text-gray-700 hover:bg-gray-100 focus:ring-2 focus:ring-gray-500 focus:outline-none disabled:opacity-50 disabled:cursor-not-allowed"
+                  style={{ minWidth: '36px', minHeight: '36px', maxWidth: '36px', maxHeight: '36px' }}
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 5v6a1 1 0 001 1h6" />
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3" />
+                  </svg>
+                </button>
+                <span className="w-10 text-[10px] leading-tight text-center mt-0.5 mb-1 text-gray-600">Save As</span>
+              </div>
+              <div className="flex flex-col items-center">
+                <button
                   onClick={handleExportXML}
                   disabled={!currentFile}
                   className="w-9 h-9 flex items-center justify-center text-base rounded-lg font-medium transition-all duration-200 text-gray-700 hover:bg-gray-100 focus:ring-2 focus:ring-gray-500 focus:outline-none disabled:opacity-50 disabled:cursor-not-allowed"
@@ -647,6 +778,25 @@ function App() {
                   </svg>
                 </button>
                 <span className="w-10 text-[10px] leading-tight text-center mt-0.5 mb-1 text-gray-600">Export</span>
+              </div>
+              <div className="flex flex-col items-center">
+                <button
+                  onClick={handleImportClick}
+                  className="w-9 h-9 flex items-center justify-center text-base rounded-lg font-medium transition-all duration-200 text-gray-700 hover:bg-gray-100 focus:ring-2 focus:ring-gray-500 focus:outline-none"
+                  style={{ minWidth: '36px', minHeight: '36px', maxWidth: '36px', maxHeight: '36px' }}
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                  </svg>
+                </button>
+                <span className="w-10 text-[10px] leading-tight text-center mt-0.5 mb-1 text-gray-600">Import</span>
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept=".xml"
+                  style={{ display: 'none' }}
+                  onChange={handleImportFileChange}
+                />
               </div>
               <div className="h-8 w-px bg-gray-300 mx-2" style={{alignSelf: 'center'}} />
               <div className="flex flex-col items-center">
@@ -1150,6 +1300,160 @@ function App() {
               </div>
             </div>
           </>
+        )}
+
+        {/* Import Modal */}
+        {showImportModal && (
+          <>
+            <div className="modal-backdrop" onClick={() => { setShowImportModal(false); setPendingImportFile(null); setPendingLexiconSwitch(null); }} />
+            <div className="modal-container">
+              <div className="modal-content">
+                <div className="mb-4 text-lg font-semibold">Abandon current lexicon?</div>
+                <div className="mb-4 text-gray-700">This will abandon the currently open lexicon. What would you like to do?</div>
+                <div className="flex justify-end gap-3">
+                  <button
+                    onClick={() => { setShowImportModal(false); setPendingImportFile(null); setPendingLexiconSwitch(null); }}
+                    className="px-4 py-2 text-base rounded-lg font-medium transition-all duration-200 bg-gray-100 text-gray-700 hover:bg-gray-200 focus:ring-2 focus:ring-gray-500 focus:outline-none"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={() => {
+                      setShowImportModal(false);
+                      setPendingImportFile(null);
+                      if (pendingLexiconSwitch) {
+                        handleSaveLexicon().then(() => {
+                          pendingLexiconSwitch();
+                          setPendingLexiconSwitch(null);
+                        });
+                      } else {
+                        handleSaveLexicon().then(() => {
+                          if (pendingImportFile) importLexiconFile(pendingImportFile);
+                        });
+                      }
+                    }}
+                    className="px-4 py-2 text-base rounded-lg font-medium transition-all duration-200 bg-gray-700 text-white hover:bg-gray-800 focus:ring-2 focus:ring-gray-500 focus:outline-none"
+                  >
+                    Save & Continue
+                  </button>
+                  <button
+                    onClick={() => {
+                      setShowImportModal(false);
+                      if (pendingLexiconSwitch) {
+                        pendingLexiconSwitch();
+                        setPendingLexiconSwitch(null);
+                      } else {
+                        if (pendingImportFile) importLexiconFile(pendingImportFile);
+                        setPendingImportFile(null);
+                      }
+                    }}
+                    className="px-4 py-2 text-base rounded-lg font-medium transition-all duration-200 bg-red-600 text-white hover:bg-red-700 focus:ring-2 focus:ring-red-500 focus:outline-none"
+                  >
+                    Discard & Continue
+                  </button>
+                </div>
+              </div>
+            </div>
+          </>
+        )}
+        {/* Import Save Prompt */}
+        {showImportSavePrompt && (
+          <>
+            <div className="modal-backdrop" onClick={() => setShowImportSavePrompt(false)} />
+            <div className="modal-container">
+              <div className="modal-content">
+                <div className="mb-4 text-lg font-semibold">Upload imported lexicon?</div>
+                <div className="mb-4 text-gray-700">Would you like to upload this lexicon now, or make changes before saving?</div>
+                <div className="flex justify-end gap-3">
+                  <button
+                    onClick={() => setShowImportSavePrompt(false)}
+                    className="px-4 py-2 text-base rounded-lg font-medium transition-all duration-200 bg-gray-100 text-gray-700 hover:bg-gray-200 focus:ring-2 focus:ring-gray-500 focus:outline-none"
+                  >
+                    Edit First
+                  </button>
+                  <button
+                    onClick={() => {
+                      setShowImportSavePrompt(false);
+                      handleSaveLexicon();
+                    }}
+                    className="px-4 py-2 text-base rounded-lg font-medium transition-all duration-200 bg-gray-700 text-white hover:bg-gray-800 focus:ring-2 focus:ring-gray-500 focus:outline-none"
+                  >
+                    Upload Now
+                  </button>
+                </div>
+              </div>
+            </div>
+          </>
+        )}
+
+        {/* Save As Modal */}
+        {showSaveAsModal && (
+          <>
+            <div className="modal-backdrop" onClick={() => setShowSaveAsModal(false)} />
+            <div className="modal-container">
+              <div className="modal-content">
+                <div className="mb-4 text-lg font-semibold">Save As</div>
+                <input
+                  type="text"
+                  value={saveAsName}
+                  onChange={e => setSaveAsName(e.target.value)}
+                  className="w-full p-2.5 rounded-lg border border-gray-300 text-gray-800 focus:ring-2 focus:ring-gray-500 focus:border-gray-500 bg-white text-base shadow-sm"
+                  placeholder="Enter new file name (e.g., my-lexicon.xml)"
+                  autoFocus
+                />
+                {saveAsError && <div className="mt-2 text-red-500 text-sm">{saveAsError}</div>}
+                <div className="flex justify-end gap-3 mt-4">
+                  <button
+                    onClick={() => setShowSaveAsModal(false)}
+                    className="px-4 py-2 text-base rounded-lg font-medium transition-all duration-200 bg-gray-100 text-gray-700 hover:bg-gray-200 focus:ring-2 focus:ring-gray-500 focus:outline-none"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={handleSaveAsConfirm}
+                    className="px-4 py-2 text-base rounded-lg font-medium transition-all duration-200 bg-gray-700 text-white hover:bg-gray-800 focus:ring-2 focus:ring-gray-500 focus:outline-none"
+                  >
+                    Save
+                  </button>
+                </div>
+              </div>
+            </div>
+          </>
+        )}
+
+        {/* Overwrite Modal */}
+        {showOverwriteModal && (
+          <>
+            <div className="modal-backdrop" onClick={() => setShowOverwriteModal(false)} />
+            <div className="modal-container">
+              <div className="modal-content">
+                <div className="mb-4 text-lg font-semibold">Overwrite File?</div>
+                <div className="mb-4 text-gray-700">A lexicon with this name already exists. Overwrite?</div>
+                <div className="flex justify-end gap-3 mt-4">
+                  <button
+                    onClick={() => setShowOverwriteModal(false)}
+                    className="px-4 py-2 text-base rounded-lg font-medium transition-all duration-200 bg-gray-100 text-gray-700 hover:bg-gray-200 focus:ring-2 focus:ring-gray-500 focus:outline-none"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={handleOverwriteConfirm}
+                    className="px-4 py-2 text-base rounded-lg font-medium transition-all duration-200 bg-red-600 text-white hover:bg-red-700 focus:ring-2 focus:ring-red-500 focus:outline-none"
+                  >
+                    Overwrite
+                  </button>
+                </div>
+              </div>
+            </div>
+          </>
+        )}
+
+        {/* Toast Banner */}
+        {toast && (
+          <div className={`fixed top-6 left-1/2 transform -translate-x-1/2 z-50 px-6 py-3 rounded-lg shadow-lg text-white ${toast.type === 'success' ? 'bg-green-600' : 'bg-red-600'}`}
+            role="status" aria-live="polite">
+            {toast.message}
+          </div>
         )}
       </div>
     </div>
